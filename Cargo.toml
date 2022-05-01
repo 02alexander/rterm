@@ -1,0 +1,15 @@
+[package]
+name = "rterm"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.57"
+clap = "3.1.13"
+lazy_static = "1.4.0"
+libc = "0.2.125"
+nix = {version="0.24.1", features=["term"]}
+pancurses = "0.17.0"
+termios = "0.3.3"
