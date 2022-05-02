@@ -19,6 +19,7 @@ fn main() {
     
     let screen = initscr();
     cbreak();
+    noecho();
     let height = screen.get_max_y();
     let width = screen.get_cur_x();
     let window = newwin(height-5, width, 5, 0);

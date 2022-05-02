@@ -4,9 +4,10 @@ use super::termdev::TerminalDevice;
 use std::io::Write;
 
 pub struct InputWindow {
-    history: Vec<String>,
-    cur_line: String,
-    window: Window,
+    pub history: Vec<String>,
+    cur_hist_idx: Option<usize>,
+    pub cur_line: String,
+    pub window: Window,
 }
 
 impl InputWindow {
@@ -19,24 +20,75 @@ impl InputWindow {
         window.mv(1, 0);
         InputWindow {
             history: Vec::new(),
+            cur_hist_idx: None,
             cur_line: String::new(),
             window,
         }
+    }
+
+    fn clear_line(&mut self) {
+        self.window.mv(1,0);
+        self.window.clrtoeol();
+        self.cur_line.clear();
+    }
+
+    fn advance_in_hist(&mut self, step: i32) {
+        self.cur_hist_idx = match self.cur_hist_idx {
+            Some(ref mut idx) => {
+                let next_idx = *idx as i32 + step;
+                if next_idx <= 0 {
+                    Some(0)
+                } else if next_idx >= self.history.len() as i32 {
+                    self.cur_line.clear();
+                    None                    
+                } else {
+                    Some(next_idx as usize)
+                }
+            },
+            None => {
+                if self.history.len() == 0 {
+                    None
+                } else if step < 0 {
+                    Some(self.history.len()-1)                    
+                } else {
+                    None
+                }
+            }
+        };
+        if let Some(idx) = self.cur_hist_idx {
+            self.cur_line = self.history[idx].clone();
+        }
+        self.update_input();
+    }
+
+    // Updates the input window with self.cur_line.
+    fn update_input(&mut self) {
+        self.window.mv(1, 0);
+        self.window.clrtoeol();
+        self.window.addstr(self.cur_line.clone());
+        self.window.refresh();
     }
 
     pub fn update(&mut self, td: &mut TerminalDevice) -> anyhow::Result<Option<pancurses::Input>> {
         if let Some(inp) = self.window.getch() {
             match inp {
                 pancurses::Input::Character(ch) => {
+                    self.cur_hist_idx = None;
                     self.cur_line.push(ch);
                     if ch == '\n' {
-                        self.history.push(self.cur_line.clone());
+                        // Adds string to history (excluding '\n'). 
+                        self.history.push(self.cur_line[0..self.cur_line.len()-1].to_owned());
                         td.write(&self.cur_line.as_bytes())?;
-                        self.window.mv(1,0);
-                        self.window.clrtoeol();
-                        self.cur_line.clear();
+                        self.clear_line();
                     }
+                    self.update_input();
                 },
+                pancurses::Input::KeyUp => {
+                    self.advance_in_hist(-1);
+                }
+                pancurses::Input::KeyDown => {
+                    self.advance_in_hist(1);
+                }
                 _ => {
                     return Ok(Some(inp));
                 }
