@@ -1,7 +1,6 @@
 
 use pancurses::Window;
-use std::sync::{Arc, Mutex};
-use std::sync::mpsc::Receiver;
+use std::sync::{Mutex};
 use lazy_static::lazy_static;
 use super::termdev::TerminalDevice;
 use std::io::Read;

@@ -1,18 +1,22 @@
 extern crate pancurses;
-extern crate libc;
 extern crate clap;
 extern crate lazy_static;
+extern crate signal_hook;
 
 mod termdev;
 mod output_window;
 mod input_window;
 
+use signal_hook::{consts::SIGINT, iterator::Signals};
 use output_window::OutputWindow;
 use input_window::InputWindow;
 use termdev::TerminalDevice;
 use clap::Parser;
 use nix::sys::termios::BaudRate;
 use pancurses::*;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static RUNNING: AtomicBool = AtomicBool::new(true);
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about=None)]
@@ -23,6 +27,20 @@ struct Cli {
 
     #[clap(short, long)]
     terminal_device: String,
+}
+
+fn setup_signal_handler() -> anyhow::Result<()> {
+    let mut signals = Signals::new(&[SIGINT])?;
+    std::thread::spawn(move || {
+        for sig in signals.forever() {
+            if sig == signal_hook::consts::signal::SIGINT {
+                while RUNNING.compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+                    std::thread::yield_now();
+                }
+            }
+        }
+    });
+    Ok(())
 }
 
 fn string_to_baudrate(s: &str) -> Option<BaudRate> {
@@ -126,9 +144,10 @@ fn main() {
     let window = newwin(height-5, width, 5, 0);
     let mut ow = OutputWindow::new(window);
     let mut iw = InputWindow::new(width, 2);
-    loop {
+
+    while RUNNING.load(Ordering::SeqCst) {
         ow.update(&mut td);
-        if let Some(special_ch) = iw.update(&mut td).unwrap() {
+        if let Some(_special_ch) = iw.update(&mut td).unwrap() {
             //ow.add_data(&format!("{:?}", special_ch));
         }
     }
