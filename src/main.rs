@@ -13,6 +13,7 @@ use input_window::InputWindow;
 use termdev::TerminalDevice;
 use clap::Parser;
 use nix::sys::termios::BaudRate;
+use std::io::{Read, Write};
 use pancurses::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -27,6 +28,9 @@ struct Cli {
 
     #[clap(short, long)]
     terminal_device: String,
+
+    #[clap(short, long)]
+    out_file: Option<String>
 }
 
 fn setup_signal_handler() -> anyhow::Result<()> {
@@ -114,6 +118,8 @@ fn string_to_baudrate(s: &str) -> Option<BaudRate> {
 
 fn main() {
 
+    setup_signal_handler().unwrap();
+    
     let parser = Cli::parse();
 
     let baudrate = match string_to_baudrate(&format!("{}", parser.baudrate)) {
@@ -124,12 +130,25 @@ fn main() {
         }
     };
 
-    let filepath = parser.terminal_device;
+    let tty_filepath = parser.terminal_device;
+    let out_filepath = parser.out_file;
     
-    let mut td = match TerminalDevice::new(filepath.clone()) {
+    let mut outfile = if let Some(fname) = out_filepath {
+        match std::fs::File::create(&fname) {
+            Ok(f) => Some(f),
+            Err(e) => {
+                println!("Error opening {}: {}", &fname, e);
+                return;
+            }
+        }
+    } else {
+        None
+    };
+
+    let mut td = match TerminalDevice::new(tty_filepath.clone()) {
         Ok(t) => t,
         Err(e) => {
-            println!("Error opening {}: {}", &filepath, e);
+            println!("Error opening {}: {}", &tty_filepath, e);
             return;
         }
     };
@@ -139,18 +158,27 @@ fn main() {
     let screen = initscr();
     cbreak();
     noecho();
+    curs_set(0);
     let height = screen.get_max_y();
     let width = screen.get_cur_x();
     let window = newwin(height-5, width, 5, 0);
     let mut ow = OutputWindow::new(window);
     let mut iw = InputWindow::new(width, 2);
 
+    let mut buf = [0 as u8; 256];
     while RUNNING.load(Ordering::SeqCst) {
-        ow.update(&mut td);
+        if let Ok(n) = td.read(&mut buf) {
+            if let Ok(s) = String::from_utf8(buf[0..n].to_vec()) {
+                ow.add_data(&s);
+                if let Some(ref mut f) = outfile {
+                    let _ = f.write(&buf[0..n]);
+                }
+            }
+        }
+
         if let Some(_special_ch) = iw.update(&mut td).unwrap() {
             //ow.add_data(&format!("{:?}", special_ch));
         }
     }
     endwin();
-
 }

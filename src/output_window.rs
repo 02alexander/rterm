@@ -2,8 +2,6 @@
 use pancurses::Window;
 use std::sync::{Mutex};
 use lazy_static::lazy_static;
-use super::termdev::TerminalDevice;
-use std::io::Read;
 
 lazy_static! {
     static ref SCREEN_LOCK: Mutex<()> = Mutex::new(());
@@ -52,15 +50,6 @@ impl OutputWindow {
 
         }
         self.window.refresh();
-    }
-    
-    pub fn update(&mut self, td: &mut TerminalDevice) {
-        let mut buf = [0 as u8; 256];
-        if let Ok(n) = td.read(&mut buf) {
-            if let Ok(s) = String::from_utf8(buf[0..n].to_vec()) {
-                self.add_data(&s);
-            }
-        }
     }
 }
 
