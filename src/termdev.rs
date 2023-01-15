@@ -1,9 +1,9 @@
-use nix::fcntl::{open, OFlag, };
+use nix::fcntl::{open, OFlag};
 use nix::sys::termios::{
-    cfsetispeed, cfsetospeed, tcgetattr, tcsetattr, BaudRate, ControlFlags, InputFlags,
-    OutputFlags, LocalFlags, SpecialCharacterIndices, Termios, SetArg, tcflush, FlushArg,
+    cfsetispeed, cfsetospeed, tcflush, tcgetattr, tcsetattr, BaudRate, ControlFlags, FlushArg,
+    InputFlags, LocalFlags, OutputFlags, SetArg, SpecialCharacterIndices, Termios,
 };
-use nix::unistd::{close, write, read};
+use nix::unistd::{close, read, write};
 use std::path::PathBuf;
 
 pub struct TerminalDevice {
@@ -23,9 +23,8 @@ impl TerminalDevice {
         cfsetispeed(&mut self.termios, baud_rate)?;
         cfsetospeed(&mut self.termios, baud_rate)?;
         self.termios.control_flags |= ControlFlags::CS8;
-        self.termios.output_flags &= !(OutputFlags::ONLCR
-            | OutputFlags::ONOCR
-            | OutputFlags::OCRNL);
+        self.termios.output_flags &=
+            !(OutputFlags::ONLCR | OutputFlags::ONOCR | OutputFlags::OCRNL);
         self.termios.output_flags |= OutputFlags::ONLRET;
         self.termios.local_flags &= !(LocalFlags::ECHO | LocalFlags::ICANON);
         self.termios.input_flags |= InputFlags::IGNCR;
@@ -36,14 +35,13 @@ impl TerminalDevice {
         tcsetattr(self.fd, SetArg::TCSAFLUSH, &self.termios)?;
         Ok(())
     }
-
 }
 
 impl std::io::Read for TerminalDevice {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match read(self.fd, buf) {
             Ok(n) => Ok(n),
-            Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, Box::new(e)))
+            Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, Box::new(e))),
         }
     }
 }
@@ -52,13 +50,13 @@ impl std::io::Write for TerminalDevice {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match write(self.fd, buf) {
             Ok(n) => Ok(n),
-            Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, Box::new(e)))
+            Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, Box::new(e))),
         }
     }
     fn flush(&mut self) -> std::io::Result<()> {
         match tcflush(self.fd, FlushArg::TCIOFLUSH) {
             Ok(_) => Ok(()),
-            Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, Box::new(e)))
+            Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, Box::new(e))),
         }
     }
 }

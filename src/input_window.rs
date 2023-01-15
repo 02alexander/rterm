@@ -1,6 +1,5 @@
-
-use pancurses::*;
 use super::termdev::TerminalDevice;
+use pancurses::*;
 use std::io::Write;
 
 pub struct InputWindow {
@@ -12,9 +11,9 @@ pub struct InputWindow {
 
 impl InputWindow {
     pub fn new(width: i32, start_y: i32) -> Self {
-        let window = newwin(3, width, start_y,0);
+        let window = newwin(3, width, start_y, 0);
         let hline = '-';
-        window.border(' ', ' ', hline,hline,hline,hline,hline,hline);
+        window.border(' ', ' ', hline, hline, hline, hline, hline, hline);
         window.timeout(1);
         window.keypad(true);
         window.mv(1, 0);
@@ -27,7 +26,7 @@ impl InputWindow {
     }
 
     fn clear_line(&mut self) {
-        self.window.mv(1,0);
+        self.window.mv(1, 0);
         self.window.clrtoeol();
         self.cur_line.clear();
     }
@@ -40,16 +39,16 @@ impl InputWindow {
                     Some(0)
                 } else if next_idx >= self.history.len() as i32 {
                     self.cur_line.clear();
-                    None                    
+                    None
                 } else {
                     Some(next_idx as usize)
                 }
-            },
+            }
             None => {
                 if self.history.len() == 0 {
                     None
                 } else if step < 0 {
-                    Some(self.history.len()-1)                    
+                    Some(self.history.len() - 1)
                 } else {
                     None
                 }
@@ -74,7 +73,7 @@ impl InputWindow {
         self.update_input();
     }
 
-    // Gets character input from user and handles this character. If the function doesn't know what to do 
+    // Gets character input from user and handles this character. If the function doesn't know what to do
     // with a character the it returns it.
     pub fn update(&mut self, td: &mut TerminalDevice) -> anyhow::Result<Option<pancurses::Input>> {
         if let Some(inp) = self.window.getch() {
@@ -82,18 +81,19 @@ impl InputWindow {
                 pancurses::Input::Character(ch) => {
                     if ch as u8 == 127 {
                         self.delete_ch();
-                    } else { 
+                    } else {
                         self.cur_hist_idx = None;
                         self.cur_line.push(ch);
                         if ch == '\n' {
-                            // Adds string to history (excluding '\n'). 
-                            self.history.push(self.cur_line[0..self.cur_line.len()-1].to_owned());
+                            // Adds string to history (excluding '\n').
+                            self.history
+                                .push(self.cur_line[0..self.cur_line.len() - 1].to_owned());
                             td.write(&self.cur_line.as_bytes())?;
                             self.clear_line();
                         }
                         self.update_input();
                     }
-                },
+                }
                 pancurses::Input::KeyUp => {
                     self.advance_in_hist(-1);
                 }

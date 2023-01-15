@@ -1,36 +1,51 @@
-extern crate pancurses;
 extern crate clap;
 extern crate lazy_static;
+extern crate pancurses;
 extern crate signal_hook;
 
-mod termdev;
-mod output_window;
 mod input_window;
+mod output_window;
+mod termdev;
 
-use signal_hook::{consts::SIGINT, iterator::Signals};
-use output_window::OutputWindow;
-use input_window::InputWindow;
-use termdev::TerminalDevice;
 use clap::Parser;
+use input_window::InputWindow;
 use nix::sys::termios::BaudRate;
-use std::io::{Read, Write};
+use output_window::OutputWindow;
 use pancurses::*;
+use signal_hook::{consts::SIGINT, iterator::Signals};
+use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
+use termdev::TerminalDevice;
 
 static RUNNING: AtomicBool = AtomicBool::new(true);
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about=None)]
 struct Cli {
-
-    #[clap(short, long, default_value_t=9600)]
+    #[clap(short, long, default_value_t = 9600)]
     baudrate: u32,
 
     #[clap(short, long)]
-    terminal_device: String,
+    terminal_device: Option<String>,
 
     #[clap(short, long)]
-    out_file: Option<String>
+    out_file: Option<String>,
+}
+
+fn find_possible_arduino_dev() -> Option<String> {
+    for dir_entry in std::fs::read_dir("/dev/").ok()? {
+        let dir_entry = dir_entry.ok()?;
+        let os_file_name = dir_entry.file_name();
+        let file_name = os_file_name.to_string_lossy();
+        if file_name.starts_with("tty") {
+            if file_name.len() >= 6 {
+                if &file_name[3..6] == "USB" || &file_name[3..6] == "ACM" {
+                    return Some("/dev/".to_string()+&file_name);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn setup_signal_handler() -> anyhow::Result<()> {
@@ -38,7 +53,10 @@ fn setup_signal_handler() -> anyhow::Result<()> {
     std::thread::spawn(move || {
         for sig in signals.forever() {
             if sig == signal_hook::consts::signal::SIGINT {
-                while RUNNING.compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+                while RUNNING
+                    .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_err()
+                {
                     std::thread::yield_now();
                 }
             }
@@ -117,9 +135,8 @@ fn string_to_baudrate(s: &str) -> Option<BaudRate> {
 }
 
 fn main() {
-
     setup_signal_handler().unwrap();
-    
+
     let parser = Cli::parse();
 
     let baudrate = match string_to_baudrate(&format!("{}", parser.baudrate)) {
@@ -130,9 +147,12 @@ fn main() {
         }
     };
 
-    let tty_filepath = parser.terminal_device;
+    let tty_filepath = parser
+        .terminal_device
+        .unwrap_or_else(|| find_possible_arduino_dev().unwrap());
+
     let out_filepath = parser.out_file;
-    
+
     let mut outfile = if let Some(fname) = out_filepath {
         match std::fs::File::create(&fname) {
             Ok(f) => Some(f),
@@ -154,14 +174,13 @@ fn main() {
     };
     td.configure_for_arduino(baudrate).unwrap();
 
-    
     let screen = initscr();
     cbreak();
     noecho();
     curs_set(0);
     let height = screen.get_max_y();
     let width = screen.get_cur_x();
-    let window = newwin(height-5, width, 5, 0);
+    let window = newwin(height - 5, width, 5, 0);
     let mut ow = OutputWindow::new(window);
     let mut iw = InputWindow::new(width, 2);
 
