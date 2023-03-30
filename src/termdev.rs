@@ -4,11 +4,29 @@ use nix::sys::termios::{
     InputFlags, LocalFlags, OutputFlags, SetArg, SpecialCharacterIndices, Termios,
 };
 use nix::unistd::{close, read, write};
+use std::io::BufWriter;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 pub struct TerminalDevice {
     fd: i32,
     termios: Termios,
+    drop_handler: Arc<TerminalCloser>,
+}
+
+/// Used to handle closing of file when the terminal is split into read and write part.   
+struct TerminalCloser {
+    fd: i32,
+}
+
+pub struct TerminalReader {
+    fd: i32,
+    drop_handler: Arc<TerminalCloser>,
+}
+
+pub struct TerminalWriter {
+    fd: i32,
+    drop_handler: Arc<TerminalCloser>,
 }
 
 impl TerminalDevice {
@@ -16,7 +34,8 @@ impl TerminalDevice {
         let oflag = OFlag::O_RDWR | OFlag::O_NOCTTY | OFlag::O_SYNC | OFlag::O_NONBLOCK;
         let fd = open(&filepath.into(), oflag, nix::sys::stat::Mode::empty())?;
         let termios = tcgetattr(fd)?;
-        Ok(TerminalDevice { fd, termios })
+        let drop_handler = Arc::new(TerminalCloser {fd});
+        Ok(TerminalDevice { fd, termios, drop_handler })
     }
 
     pub fn configure_for_arduino(&mut self, baud_rate: BaudRate) -> anyhow::Result<()> {
@@ -35,33 +54,52 @@ impl TerminalDevice {
         tcsetattr(self.fd, SetArg::TCSAFLUSH, &self.termios)?;
         Ok(())
     }
+
+    /// Splits the device into a read and a write part.
+    pub fn split(self) -> (TerminalReader, TerminalWriter) {
+        (TerminalReader {
+            fd: self.fd,
+            drop_handler: self.drop_handler.clone(),
+        },TerminalWriter {
+            fd: self.fd,
+            drop_handler: self.drop_handler.clone(),
+        })
+    }
 }
 
 impl std::io::Read for TerminalDevice {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        match read(self.fd, buf) {
-            Ok(n) => Ok(n),
-            Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, Box::new(e))),
-        }
+        read(self.fd, buf).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, Box::new(e)))
+
     }
 }
 
 impl std::io::Write for TerminalDevice {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        match write(self.fd, buf) {
-            Ok(n) => Ok(n),
-            Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, Box::new(e))),
-        }
+        write(self.fd, buf).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, Box::new(e)))
     }
     fn flush(&mut self) -> std::io::Result<()> {
-        match tcflush(self.fd, FlushArg::TCIOFLUSH) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, Box::new(e))),
-        }
+        tcflush(self.fd, FlushArg::TCIOFLUSH).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, Box::new(e)))
     }
 }
 
-impl std::ops::Drop for TerminalDevice {
+impl std::io::Write for TerminalWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        write(self.fd, buf).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, Box::new(e)))
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        tcflush(self.fd, FlushArg::TCIOFLUSH).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, Box::new(e)))
+    }
+}
+
+
+impl std::io::Read for TerminalReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        read(self.fd, buf).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, Box::new(e)))
+    }
+}
+
+impl std::ops::Drop for TerminalCloser {
     fn drop(&mut self) {
         let _ = close(self.fd);
     }
