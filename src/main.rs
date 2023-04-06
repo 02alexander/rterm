@@ -1,23 +1,16 @@
-extern crate clap;
-extern crate lazy_static;
-extern crate pancurses;
-extern crate signal_hook;
-
-mod input_window;
-mod output_window;
+mod app;
 mod termdev;
 
+use anyhow::{anyhow, Context};
 use clap::Parser;
-use input_window::InputWindow;
+use crossterm::{
+    event::{DisableMouseCapture, EnableMouseCapture},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
 use nix::sys::termios::BaudRate;
-use output_window::OutputWindow;
-use pancurses::*;
-use signal_hook::{consts::SIGINT, iterator::Signals};
-use std::io::{Read, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
 use termdev::TerminalDevice;
-
-static RUNNING: AtomicBool = AtomicBool::new(true);
+use tui::{backend::CrosstermBackend, Terminal};
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about=None)]
@@ -40,29 +33,12 @@ fn find_possible_arduino_dev() -> Option<String> {
         if file_name.starts_with("tty") {
             if file_name.len() >= 6 {
                 if &file_name[3..6] == "USB" || &file_name[3..6] == "ACM" {
-                    return Some("/dev/".to_string()+&file_name);
+                    return Some("/dev/".to_string() + &file_name);
                 }
             }
         }
     }
     None
-}
-
-fn setup_signal_handler() -> anyhow::Result<()> {
-    let mut signals = Signals::new(&[SIGINT])?;
-    std::thread::spawn(move || {
-        for sig in signals.forever() {
-            if sig == signal_hook::consts::signal::SIGINT {
-                while RUNNING
-                    .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
-                    .is_err()
-                {
-                    std::thread::yield_now();
-                }
-            }
-        }
-    });
-    Ok(())
 }
 
 fn string_to_baudrate(s: &str) -> Option<BaudRate> {
@@ -134,70 +110,49 @@ fn string_to_baudrate(s: &str) -> Option<BaudRate> {
     }
 }
 
-fn main() {
-    setup_signal_handler().unwrap();
-
+fn main() -> anyhow::Result<()> {
     let parser = Cli::parse();
 
-    let baudrate = match string_to_baudrate(&format!("{}", parser.baudrate)) {
-        Some(brate) => brate,
-        None => {
-            println!("Error: '{}' is not a valid baudrate", parser.baudrate);
-            return;
-        }
+    let baudrate =
+        string_to_baudrate(&format!("{}", parser.baudrate)).ok_or(anyhow!("invaild baubrate"))?;
+    let tty_filepath = if let Some(path) = parser.terminal_device {
+        path
+    } else {
+        find_possible_arduino_dev().ok_or(anyhow!(
+            "Could not find any open serial port automatically, please specify port"
+        ))?
     };
-
-    let tty_filepath = parser
-        .terminal_device
-        .unwrap_or_else(|| find_possible_arduino_dev().unwrap());
 
     let out_filepath = parser.out_file;
 
-    let mut outfile = if let Some(fname) = out_filepath {
-        match std::fs::File::create(&fname) {
-            Ok(f) => Some(f),
-            Err(e) => {
-                println!("Error opening {}: {}", &fname, e);
-                return;
-            }
-        }
+    let outfile = if let Some(fname) = out_filepath {
+        Some(std::fs::File::create(&fname).context(format!("opening '{}'", &fname))?)
     } else {
         None
     };
 
-    let mut td = match TerminalDevice::new(tty_filepath.clone()) {
-        Ok(t) => t,
-        Err(e) => {
-            println!("Error opening {}: {}", &tty_filepath, e);
-            return;
-        }
-    };
-    td.configure_for_arduino(baudrate).unwrap();
+    let mut td =
+        TerminalDevice::new(tty_filepath.clone()).context(format!("opening '{tty_filepath}'"))?;
+    td.configure_for_arduino(baudrate)?;
 
-    let screen = initscr();
-    cbreak();
-    noecho();
-    curs_set(0);
-    let height = screen.get_max_y();
-    let width = screen.get_cur_x();
-    let window = newwin(height - 5, width, 5, 0);
-    let mut ow = OutputWindow::new(window);
-    let mut iw = InputWindow::new(width, 2);
+    let mut app = app::App::new(outfile);
 
-    let mut buf = [0 as u8; 256];
-    while RUNNING.load(Ordering::SeqCst) {
-        if let Ok(n) = td.read(&mut buf) {
-            if let Ok(s) = String::from_utf8(buf[0..n].to_vec()) {
-                ow.add_data(&s);
-                if let Some(ref mut f) = outfile {
-                    let _ = f.write(&buf[0..n]);
-                }
-            }
-        }
+    enable_raw_mode()?;
+    let mut stdout = std::io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
 
-        if let Some(_special_ch) = iw.update(&mut td).unwrap() {
-            //ow.add_data(&format!("{:?}", special_ch));
-        }
-    }
-    endwin();
+    let res = app.run(td, &mut terminal);
+
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+    )?;
+    disable_raw_mode()?;
+    terminal.show_cursor()?;
+    println!("exited gracefully");
+
+    res
 }

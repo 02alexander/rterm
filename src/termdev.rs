@@ -4,6 +4,7 @@ use nix::sys::termios::{
     InputFlags, LocalFlags, OutputFlags, SetArg, SpecialCharacterIndices, Termios,
 };
 use nix::unistd::{close, read, write};
+use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -73,35 +74,33 @@ impl TerminalDevice {
     }
 }
 
-impl std::io::Read for TerminalDevice {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        read(self.fd, buf).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, Box::new(e)))
+impl io::Read for TerminalDevice {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        read(self.fd, buf).map_err(|e| io::Error::try_from(e).unwrap())
     }
 }
 
-impl std::io::Write for TerminalDevice {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        write(self.fd, buf).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, Box::new(e)))
+impl io::Write for TerminalDevice {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        write(self.fd, buf).map_err(|e| io::Error::try_from(e).unwrap())
     }
-    fn flush(&mut self) -> std::io::Result<()> {
-        tcflush(self.fd, FlushArg::TCIOFLUSH)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, Box::new(e)))
-    }
-}
-
-impl std::io::Write for TerminalWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        write(self.fd, buf).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, Box::new(e)))
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        tcflush(self.fd, FlushArg::TCIOFLUSH)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, Box::new(e)))
+    fn flush(&mut self) -> io::Result<()> {
+        tcflush(self.fd, FlushArg::TCIOFLUSH).map_err(|e| io::Error::try_from(e).unwrap())
     }
 }
 
-impl std::io::Read for TerminalReader {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        read(self.fd, buf).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, Box::new(e)))
+impl io::Write for TerminalWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        write(self.fd, buf).map_err(|e| io::Error::try_from(e).unwrap())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        tcflush(self.fd, FlushArg::TCIOFLUSH).map_err(|e| io::Error::try_from(e).unwrap())
+    }
+}
+
+impl io::Read for TerminalReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        read(self.fd, buf).map_err(|e| io::Error::try_from(e).unwrap())
     }
 }
 
