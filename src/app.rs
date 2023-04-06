@@ -9,7 +9,7 @@ use std::{
 use crossterm::event::{self, Event, KeyCode};
 use tui::{
     backend::Backend,
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Span, Spans},
     widgets::{Block, Borders, List, ListItem, ListState},
@@ -24,6 +24,12 @@ pub struct App {
     lines: Vec<String>,
     state: ListState,
     history: Vec<String>,
+}
+
+pub struct UI {
+    input_chunk: Rect,
+    ouput_chunk: Rect,
+    state: ListState,
 }
 
 pub fn term_io_loop(
@@ -103,6 +109,8 @@ impl App {
         td: TerminalDevice,
         terminal: &mut Terminal<B>,
     ) -> anyhow::Result<()> {
+        let mut ui = None;
+
         let mut textarea = TextArea::default();
 
         let (stop_rx, stop_rc) = mpsc::channel();
@@ -112,7 +120,12 @@ impl App {
         let _ = thread::spawn(|| term_io_loop(td, stop_rc, write_thread_rx, read_thread_tx));
 
         let res = 'event: loop {
-            terminal.draw(|b| self.ui(b, &mut textarea))?;
+            terminal.draw(|b| {
+                if ui.is_none() {
+                    ui = Some(UI::new(b));
+                }
+                ui.as_mut().unwrap().render(b, &self.lines, &mut textarea);
+            })?;
 
             // Checke for any incoming bytes from the terminal device.
             if let Ok(res) = read_rx.try_recv() {
@@ -124,18 +137,26 @@ impl App {
             }
 
             if let Ok(true) = event::poll(Duration::from_millis(1)) {
-                if let Event::Key(key) = event::read()? {
-                    if key.code == KeyCode::Esc {
-                        return Ok(());
-                    } else if key.code == KeyCode::Enter {
-                        let mut line = textarea.lines()[0].clone();
-                        textarea = TextArea::default();
-                        line.push('\n');
-                        write_tx.send(line.bytes().collect())?;
-                        self.history.push(line);
-                    } else {
-                        textarea.input(key);
+                let event = event::read()?;
+                match event {
+                    Event::Key(key) => {
+                        if key.code == KeyCode::Esc {
+                            return Ok(());
+                        } else if key.code == KeyCode::Enter {
+                            let mut line = textarea.lines()[0].clone();
+                            textarea = TextArea::default();
+                            line.push('\n');
+                            write_tx.send(line.bytes().collect())?;
+                            self.history.push(line);
+                        } else {
+                            textarea.input(key);
+                        }
                     }
+                    Event::Mouse(mouse_event) => match mouse_event.kind {
+                        _ => {}
+                    },
+                    Event::Resize(_, _) => {}
+                    _ => {}
                 }
             }
         };
@@ -158,7 +179,7 @@ impl App {
                 format!("{}", ch.chars().next().unwrap())
             } else {
                 // If it's not a vaild char, print out its hex value.
-                format!("{byte:x}")
+                format!("0x{byte:X}")
             };
 
             self.lines.last_mut().unwrap().push_str(&str);
@@ -169,9 +190,10 @@ impl App {
         }
         Ok(())
     }
+}
 
-    /// Renders all the widgets ant their content.
-    fn ui<B: Backend>(&mut self, f: &mut Frame<B>, textarea: &mut TextArea) {
+impl UI {
+    fn new<B: Backend>(f: &mut Frame<B>) -> Self {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -181,12 +203,27 @@ impl App {
             ])
             .split(f.size());
 
-        let input_block = Block::default().borders(Borders::ALL);
-        textarea.set_block(input_block);
-        f.render_widget(textarea.widget(), chunks[0]);
+        UI {
+            ouput_chunk: chunks[1],
+            input_chunk: chunks[0],
+            state: ListState::default(),
+        }
+    }
 
-        let items: Vec<ListItem> = self
-            .lines
+    /// Renders all the widgets and their content.
+    fn render<B: Backend>(
+        &mut self,
+        f: &mut Frame<B>,
+        lines: &Vec<String>,
+        textarea: &mut TextArea,
+    ) {
+        let input_block = Block::default().borders(Borders::ALL);
+        let output_block = Block::default().borders(Borders::ALL);
+
+        textarea.set_block(input_block);
+        f.render_widget(textarea.widget(), self.input_chunk);
+
+        let items: Vec<ListItem> = lines
             .iter()
             .enumerate()
             .map(|(i, line)| {
@@ -202,7 +239,7 @@ impl App {
             })
             .collect();
         self.state.select(Some(items.len() - 1));
-        let list = List::new(items);
-        f.render_stateful_widget(list, chunks[1], &mut self.state);
+        let list = List::new(items).block(output_block);
+        f.render_stateful_widget(list, self.ouput_chunk, &mut self.state);
     }
 }

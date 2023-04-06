@@ -289,7 +289,6 @@ dependencies = [
  "anyhow",
  "clap",
  "crossterm",
- "log",
  "nix",
  "tui",
  "tui-textarea",
