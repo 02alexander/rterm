@@ -230,12 +230,34 @@ impl UI {
                 let row_number_style = Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::ITALIC);
-                let text = Spans::from(vec![
+
+                let area_width = output_block.inner(f.size()).width;
+                let split_points = (0..=(4 + line.len()) / area_width as usize)
+                    .map(|x| 0.max(x as i32 * area_width as i32 - 4) as usize)
+                    .chain(std::iter::once(line.len()));
+
+                eprintln!("vec = {:?}", split_points.clone().collect::<Vec<_>>());
+
+                let mut lines = Vec::new();
+                for (start, end) in split_points.clone().zip(split_points.clone().skip(1)) {
+                    lines.push(line[start..end].to_owned());
+                    // spans.push(Span::styled(line[start..end].to_owned(), Style::default()));
+                }
+                let mut first_line_spans = vec![Spans::from(vec![
                     Span::styled(format!("{:0>2}> ", i % 100), row_number_style),
-                    Span::styled(line, Style::default()),
-                ]);
-                //text.extend(Span::raw(format!("'{}'", line));
-                ListItem::new(text)
+                    Span::styled(lines[0].clone(), Style::default()),
+                ])];
+                let mut other_lines = Vec::new();
+                for line in &lines[1..] {
+                    other_lines.push(Spans::from(vec![Span::styled(
+                        line.clone(),
+                        Style::default(),
+                    )]));
+                }
+                first_line_spans.append(&mut other_lines);
+
+                let item = ListItem::new(first_line_spans);
+                item
             })
             .collect();
         self.state.select(Some(items.len() - 1));
