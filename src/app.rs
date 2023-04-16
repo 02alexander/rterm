@@ -2,17 +2,16 @@ use std::{
     fs::File,
     io::{self, Read, Write},
     sync::mpsc::{self, Receiver, Sender},
-    thread,
+    thread::{self},
     time::Duration,
 };
 
-use crossterm::event::{self, Event, KeyCode};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use tui::{
     backend::Backend,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
-    text::{Span, Spans},
-    widgets::{Block, Borders, List, ListItem, ListState},
+    style::{Color, Style},
+    widgets::{Block, Borders},
     Frame, Terminal,
 };
 use tui_textarea::TextArea;
@@ -21,15 +20,12 @@ use crate::termdev::TerminalDevice;
 
 pub struct App {
     outfile: Option<File>,
-    lines: Vec<String>,
-    state: ListState,
     history: Vec<String>,
 }
 
 pub struct UI {
     input_chunk: Rect,
     ouput_chunk: Rect,
-    state: ListState,
 }
 
 pub fn term_io_loop(
@@ -97,9 +93,7 @@ pub fn term_io_loop(
 impl App {
     pub fn new(outfile: Option<File>) -> Self {
         App {
-            state: ListState::default(),
             outfile,
-            lines: vec![String::new()],
             history: Vec::new(),
         }
     }
@@ -112,6 +106,9 @@ impl App {
         let mut ui = None;
 
         let mut textarea = TextArea::default();
+        let mut outputtextarea = TextArea::default();
+        outputtextarea.set_cursor_style(Style::default());
+        outputtextarea.set_line_number_style(Style::default().fg(Color::Yellow));
 
         let (stop_rx, stop_rc) = mpsc::channel();
         let (read_thread_tx, read_rx) = mpsc::channel();
@@ -124,13 +121,15 @@ impl App {
                 if ui.is_none() {
                     ui = Some(UI::new(b));
                 }
-                ui.as_mut().unwrap().render(b, &self.lines, &mut textarea);
+                ui.as_mut()
+                    .unwrap()
+                    .render(b, &mut textarea, &mut outputtextarea);
             })?;
 
             // Checke for any incoming bytes from the terminal device.
             if let Ok(res) = read_rx.try_recv() {
                 for byte in &res {
-                    if let Err(e) = self.parse_byte(*byte) {
+                    if let Err(e) = self.parse_byte(*byte, &mut outputtextarea) {
                         break 'event Err(e);
                     };
                 }
@@ -148,11 +147,22 @@ impl App {
                             line.push('\n');
                             write_tx.send(line.bytes().collect())?;
                             self.history.push(line);
+                        } else if key.code == KeyCode::Char('d')
+                            && key.modifiers == KeyModifiers::CONTROL
+                        {
+                            outputtextarea.move_cursor(tui_textarea::CursorMove::Bottom);
+                            outputtextarea.move_cursor(tui_textarea::CursorMove::End);
                         } else {
                             textarea.input(key);
                         }
                     }
                     Event::Mouse(mouse_event) => match mouse_event.kind {
+                        event::MouseEventKind::ScrollDown => {
+                            outputtextarea.scroll((1, 0));
+                        }
+                        event::MouseEventKind::ScrollUp => {
+                            outputtextarea.scroll((-1, 0));
+                        }
                         _ => {}
                     },
                     Event::Resize(_, _) => {}
@@ -166,27 +176,41 @@ impl App {
         res.map_err(|e| anyhow::anyhow!(e))
     }
 
-    /// Parses a byte read from the terminal device.
-    pub fn parse_byte(&mut self, byte: u8) -> std::io::Result<()> {
+    /// Parses a byte from the terminal device.
+    pub fn parse_byte<'a>(
+        &mut self,
+        byte: u8,
+        outputtextarea: &mut TextArea<'a>,
+    ) -> std::io::Result<()> {
+        let cursor_pos = outputtextarea.cursor();
+        outputtextarea.move_cursor(tui_textarea::CursorMove::Bottom);
+        outputtextarea.move_cursor(tui_textarea::CursorMove::End);
+        let jumped = cursor_pos != outputtextarea.cursor();
         if byte == 10 {
+            // new line
             if let Some(outfile) = &mut self.outfile {
                 outfile.write_all(&mut format!("\n").into_bytes())?;
                 outfile.flush()?;
             }
-            self.lines.push(String::new());
+            outputtextarea.insert_newline();
         } else {
             let str = if let Ok(ch) = std::str::from_utf8(&[byte]) {
                 format!("{}", ch.chars().next().unwrap())
             } else {
-                // If it's not a vaild char, print out its hex value.
+                // If it's not a vaild char, display out its hex value.
                 format!("0x{byte:X}")
             };
-
-            self.lines.last_mut().unwrap().push_str(&str);
+            outputtextarea.insert_str(&str);
             if let Some(outfile) = &mut self.outfile {
                 outfile.write_all(&mut str.into_bytes())?;
                 outfile.flush()?;
             }
+        }
+        if jumped {
+            outputtextarea.move_cursor(tui_textarea::CursorMove::Jump(
+                cursor_pos.0 as u16,
+                cursor_pos.1 as u16,
+            ));
         }
         Ok(())
     }
@@ -206,7 +230,6 @@ impl UI {
         UI {
             ouput_chunk: chunks[1],
             input_chunk: chunks[0],
-            state: ListState::default(),
         }
     }
 
@@ -214,8 +237,8 @@ impl UI {
     fn render<B: Backend>(
         &mut self,
         f: &mut Frame<B>,
-        lines: &Vec<String>,
         textarea: &mut TextArea,
+        outputtextarea: &mut TextArea,
     ) {
         let input_block = Block::default().borders(Borders::ALL);
         let output_block = Block::default().borders(Borders::ALL);
@@ -223,45 +246,7 @@ impl UI {
         textarea.set_block(input_block);
         f.render_widget(textarea.widget(), self.input_chunk);
 
-        let items: Vec<ListItem> = lines
-            .iter()
-            .enumerate()
-            .map(|(i, line)| {
-                let row_number_style = Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::ITALIC);
-
-                let area_width = output_block.inner(f.size()).width;
-                let split_points = (0..=(4 + line.len()) / area_width as usize)
-                    .map(|x| 0.max(x as i32 * area_width as i32 - 4) as usize)
-                    .chain(std::iter::once(line.len()));
-
-                eprintln!("vec = {:?}", split_points.clone().collect::<Vec<_>>());
-
-                let mut lines = Vec::new();
-                for (start, end) in split_points.clone().zip(split_points.clone().skip(1)) {
-                    lines.push(line[start..end].to_owned());
-                    // spans.push(Span::styled(line[start..end].to_owned(), Style::default()));
-                }
-                let mut first_line_spans = vec![Spans::from(vec![
-                    Span::styled(format!("{:0>2}> ", i % 100), row_number_style),
-                    Span::styled(lines[0].clone(), Style::default()),
-                ])];
-                let mut other_lines = Vec::new();
-                for line in &lines[1..] {
-                    other_lines.push(Spans::from(vec![Span::styled(
-                        line.clone(),
-                        Style::default(),
-                    )]));
-                }
-                first_line_spans.append(&mut other_lines);
-
-                let item = ListItem::new(first_line_spans);
-                item
-            })
-            .collect();
-        self.state.select(Some(items.len() - 1));
-        let list = List::new(items).block(output_block);
-        f.render_stateful_widget(list, self.ouput_chunk, &mut self.state);
+        outputtextarea.set_block(output_block);
+        f.render_widget(outputtextarea.widget(), self.ouput_chunk);
     }
 }
