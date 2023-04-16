@@ -1,6 +1,8 @@
 mod app;
 mod termdev;
 
+use std::{panic::{self, AssertUnwindSafe}};
+
 use anyhow::{anyhow, Context};
 use clap::Parser;
 use crossterm::{
@@ -9,8 +11,11 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use nix::sys::termios::BaudRate;
+use regex::Regex;
 use termdev::TerminalDevice;
 use tui::{backend::CrosstermBackend, Terminal};
+
+use crate::app::Grapher;
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about=None)]
@@ -23,6 +28,12 @@ struct Cli {
 
     #[clap(short, long)]
     out_file: Option<String>,
+
+    #[clap(short, long)]
+    graph: bool,
+
+    #[clap(long, default_value_t=60)]
+    graph_len: usize 
 }
 
 fn find_possible_arduino_dev() -> Option<String> {
@@ -136,6 +147,14 @@ fn main() -> anyhow::Result<()> {
     td.configure_for_arduino(baudrate)?;
 
     let mut app = app::App::new(outfile);
+    if parser.graph {
+        app.grapher = Some(Grapher {
+            data: Vec::new(),
+            value_pattern: Regex::new("(\\-?\\d+\\.?[\\d]*)").unwrap(),
+            window_len: parser.graph_len,
+            window: [0.0, parser.graph_len as f64]   
+        });
+    }
 
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
@@ -143,8 +162,12 @@ fn main() -> anyhow::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let res = app.run(td, &mut terminal);
+    // Spawn main app in seperate thread so that the cleanup runs even when the app panics.
+    let res = panic::catch_unwind(AssertUnwindSafe(|| {
+        app.run(td, &mut terminal)
+    }));
 
+    // Cleanup.
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
@@ -152,7 +175,14 @@ fn main() -> anyhow::Result<()> {
     )?;
     disable_raw_mode()?;
     terminal.show_cursor()?;
-    println!("exited gracefully");
 
-    res
+    match res {
+        Ok(res) => {
+            println!("{:?}", res);
+        },
+        Err(e) => {
+            println!("panicked: {:?}", e.downcast_ref::<&'static str>().unwrap());
+        }
+    }
+    Ok(())
 }

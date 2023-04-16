@@ -7,11 +7,15 @@ use std::{
 };
 
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use ordered_float::OrderedFloat;
+use regex::Regex;
 use tui::{
     backend::Backend,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Style},
-    widgets::{Block, Borders},
+    style::{Color, Modifier, Style},
+    symbols,
+    text::Span,
+    widgets::{Axis, Block, Borders, Chart, Dataset, GraphType},
     Frame, Terminal,
 };
 use tui_textarea::TextArea;
@@ -21,11 +25,21 @@ use crate::termdev::TerminalDevice;
 pub struct App {
     outfile: Option<File>,
     history: Vec<String>,
+    cur_line: String,
+    pub grapher: Option<Grapher>,
+}
+
+pub struct Grapher {
+    pub data: Vec<(f64, f64)>,
+    pub value_pattern: Regex,
+    pub window_len: usize,
+    pub window: [f64; 2],
 }
 
 pub struct UI {
     input_chunk: Rect,
     ouput_chunk: Rect,
+    graph_chunk: Option<Rect>,
 }
 
 pub fn term_io_loop(
@@ -79,7 +93,6 @@ pub fn term_io_loop(
             Err(mpsc::TryRecvError::Empty) => {}
         }
         if term_reader_handle.is_finished() || term_writer_handle.is_finished() {
-            println!("a thread finished");
             break;
         }
     }
@@ -94,7 +107,9 @@ impl App {
     pub fn new(outfile: Option<File>) -> Self {
         App {
             outfile,
+            cur_line: String::new(),
             history: Vec::new(),
+            grapher: None,
         }
     }
 
@@ -119,11 +134,14 @@ impl App {
         let res = 'event: loop {
             terminal.draw(|b| {
                 if ui.is_none() {
-                    ui = Some(UI::new(b));
+                    ui = Some(UI::new(b, self.grapher.is_some()));
                 }
-                ui.as_mut()
-                    .unwrap()
-                    .render(b, &mut textarea, &mut outputtextarea);
+                ui.as_mut().unwrap().render(
+                    b,
+                    &mut textarea,
+                    &mut outputtextarea,
+                    &mut self.grapher,
+                );
             })?;
 
             // Checke for any incoming bytes from the terminal device.
@@ -167,7 +185,7 @@ impl App {
                     },
                     Event::Resize(w, h) => {
                         if let Some(ui) = ui.as_mut() {
-                            ui.update_size(w, h);
+                            ui.update_size(w, h, self.grapher.is_some());
                         }
                     }
                     _ => {}
@@ -197,6 +215,22 @@ impl App {
                 outfile.flush()?;
             }
             outputtextarea.insert_newline();
+            if let Some(grapher) = &mut self.grapher {
+                if let Some(captures) = grapher.value_pattern.captures(&self.cur_line) {
+                    if let Some(capture) = captures.get(0) {
+                        if let Ok(val) = capture.as_str().parse() {
+                            if grapher.data.len() as f64 + grapher.window_len as f64 / 10.0
+                                > grapher.window[1]
+                            {
+                                grapher.window[0] += 1.0;
+                                grapher.window[1] += 1.0;
+                            }
+                            grapher.data.push((grapher.data.len() as f64, val));
+                        }
+                    }
+                }
+            }
+            self.cur_line.clear();
         } else {
             let str = if let Ok(ch) = std::str::from_utf8(&[byte]) {
                 format!("{}", ch.chars().next().unwrap())
@@ -205,6 +239,7 @@ impl App {
                 format!("0x{byte:X}")
             };
             outputtextarea.insert_str(&str);
+            self.cur_line.push_str(&str);
             if let Some(outfile) = &mut self.outfile {
                 outfile.write_all(&mut str.into_bytes())?;
                 outfile.flush()?;
@@ -221,35 +256,37 @@ impl App {
 }
 
 impl UI {
-    fn new(f: &mut Frame<impl Backend>) -> Self {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3),
-                Constraint::Min(4),
-                Constraint::Length(1),
-            ])
-            .split(f.size());
-
+    fn new(f: &mut Frame<impl Backend>, graph: bool) -> Self {
+        let chunks = UI::generate_chunks(f.size(), graph);
+        let graph_chunk = if graph { Some(chunks[2]) } else { None };
         UI {
             ouput_chunk: chunks[1],
             input_chunk: chunks[0],
+            graph_chunk,
         }
     }
 
-    fn update_size(&mut self, width: u16, height: u16) {
-        let chunks = Layout::default()
+    pub fn generate_chunks(rect: Rect, graph: bool) -> Vec<Rect> {
+        let mut constraints = vec![Constraint::Length(3)];
+        if graph {
+            constraints.push(Constraint::Percentage(50));
+            constraints.push(Constraint::Percentage(50));
+        } else {
+            constraints.push(Constraint::Min(4));
+        }
+        Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3),
-                Constraint::Min(4),
-                Constraint::Length(1),
-            ])
-            .split(Rect::new(0, 0, width, height));
+            .constraints(constraints)
+            .split(rect)
+    }
 
+    fn update_size(&mut self, width: u16, height: u16, graph: bool) {
+        let chunks = UI::generate_chunks(Rect::new(0, 0, width, height), graph);
+        let graph_chunk = if graph { Some(chunks[2]) } else { None };
         *self = UI {
             ouput_chunk: chunks[1],
             input_chunk: chunks[0],
+            graph_chunk,
         }
     }
 
@@ -259,6 +296,7 @@ impl UI {
         f: &mut Frame<B>,
         textarea: &mut TextArea,
         outputtextarea: &mut TextArea,
+        grapher: &mut Option<Grapher>,
     ) {
         let input_block = Block::default().borders(Borders::ALL);
         let output_block = Block::default().borders(Borders::ALL);
@@ -268,5 +306,48 @@ impl UI {
 
         outputtextarea.set_block(output_block);
         f.render_widget(outputtextarea.widget(), self.ouput_chunk);
+
+        if let Some(graph_chunk) = self.graph_chunk {
+            let graph_block = Block::default().borders(Borders::ALL);
+            let grapher = grapher.as_ref().unwrap();
+            let visible_data = &grapher.data
+                [0.max(grapher.data.len() as i64 - grapher.window_len as i64) as usize..];
+            let datasets = vec![Dataset::default()
+                .marker(symbols::Marker::Braille)
+                .style(Style::default().fg(Color::Yellow))
+                .graph_type(GraphType::Line)
+                .data(&visible_data)];
+
+            let min = visible_data
+                .iter()
+                .min_by_key(|(_x, y)| OrderedFloat(*y))
+                .and_then(|x| Some(x.1))
+                .unwrap_or(-1.0);
+            let max = visible_data
+                .iter()
+                .max_by_key(|(_x, y)| OrderedFloat(*y))
+                .and_then(|x| Some(x.1))
+                .unwrap_or(1.0);
+            let size = max - min;
+            let min = min - 0.1 * size - 0.001*max.abs().max(min.abs());
+            let max = max + 0.1 * size + 0.001*max.abs().max(min.abs());
+            let mean = (max + min)/2.0;
+
+            let chart = Chart::new(datasets)
+                .block(graph_block)
+                .x_axis(Axis::default().bounds(grapher.window).title("X axis"))
+                .y_axis(Axis::default().bounds([min, max]).labels(vec![
+                    Span::styled(
+                        format!("{min:.4}"),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(format!("{mean:.4}")),
+                    Span::styled(
+                        format!("{max:.4}"),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+            f.render_widget(chart, graph_chunk);
+        }
     }
 }
