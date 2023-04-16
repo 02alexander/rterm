@@ -165,7 +165,11 @@ impl App {
                         }
                         _ => {}
                     },
-                    Event::Resize(_, _) => {}
+                    Event::Resize(w, h) => {
+                        if let Some(ui) = ui.as_mut() {
+                            ui.update_size(w, h);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -217,7 +221,7 @@ impl App {
 }
 
 impl UI {
-    fn new<B: Backend>(f: &mut Frame<B>) -> Self {
+    fn new(f: &mut Frame<impl Backend>) -> Self {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -228,6 +232,22 @@ impl UI {
             .split(f.size());
 
         UI {
+            ouput_chunk: chunks[1],
+            input_chunk: chunks[0],
+        }
+    }
+
+    fn update_size(&mut self, width: u16, height: u16) {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Min(4),
+                Constraint::Length(1),
+            ])
+            .split(Rect::new(0, 0, width, height));
+
+        *self = UI {
             ouput_chunk: chunks[1],
             input_chunk: chunks[0],
         }
