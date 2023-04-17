@@ -1,7 +1,7 @@
 mod app;
 mod termdev;
 
-use std::{panic::{self, AssertUnwindSafe}};
+use std::{io::Stdout, sync::{Mutex}, panic::{self, AssertUnwindSafe}};
 
 use anyhow::{anyhow, Context};
 use clap::Parser;
@@ -121,7 +121,45 @@ fn string_to_baudrate(s: &str) -> Option<BaudRate> {
     }
 }
 
+struct TerminalHandler {
+    terminal: Terminal<CrosstermBackend<Stdout>>,
+}
+
+impl TerminalHandler {
+    fn new() -> anyhow::Result<Self> {
+        enable_raw_mode()?;
+        let mut stdout = std::io::stdout();
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+        let backend = CrosstermBackend::new(stdout);
+        let terminal = Terminal::new(backend)?;
+        Ok(Self { terminal })
+    }
+}
+
+impl Drop for TerminalHandler {
+    fn drop(&mut self) {
+        // Cleanup.
+        let _ = execute!(
+            self.terminal.backend_mut(),
+            LeaveAlternateScreen,
+            DisableMouseCapture,
+        );
+        let _ = disable_raw_mode();
+        let _ = self.terminal.show_cursor();
+
+        if let Ok(info) = PANICINFO.lock() {
+            if let Some(info) = &*info {
+                eprintln!("{}", info);
+            }
+        }
+        
+    }
+}
+
+static PANICINFO: Mutex<Option<String>> = Mutex::new(None);
+
 fn main() -> anyhow::Result<()> {
+    
     let parser = Cli::parse();
 
     let baudrate =
@@ -155,34 +193,18 @@ fn main() -> anyhow::Result<()> {
             window: [0.0, parser.graph_len as f64]   
         });
     }
-
-    enable_raw_mode()?;
-    let mut stdout = std::io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
-    // Spawn main app in seperate thread so that the cleanup runs even when the app panics.
-    let res = panic::catch_unwind(AssertUnwindSafe(|| {
-        app.run(td, &mut terminal)
+    std::panic::set_hook(Box::new(|e| {
+        let mut info = PANICINFO.lock().unwrap();
+        *info = Some(format!("{:?}", e));
     }));
 
-    // Cleanup.
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture,
-    )?;
-    disable_raw_mode()?;
-    terminal.show_cursor()?;
+    let mut handler = TerminalHandler::new().unwrap();
 
-    match res {
-        Ok(res) => {
-            println!("{:?}", res);
-        },
-        Err(e) => {
-            println!("panicked: {:?}", e.downcast_ref::<&'static str>().unwrap());
-        }
-    }
+    let res = panic::catch_unwind(AssertUnwindSafe( || {
+        app.run(td, &mut handler.terminal)
+    }));
+    println!("{:?}", res);
+
+ 
     Ok(())
 }
