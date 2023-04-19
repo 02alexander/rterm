@@ -1,7 +1,12 @@
 mod app;
 mod termdev;
+mod wraptext;
 
-use std::{io::Stdout, sync::{Mutex}, panic::{self, AssertUnwindSafe}};
+use std::{
+    io::Stdout,
+    panic::{self, AssertUnwindSafe},
+    sync::Mutex,
+};
 
 use anyhow::{anyhow, Context};
 use clap::Parser;
@@ -32,8 +37,8 @@ struct Cli {
     #[clap(short, long)]
     graph: bool,
 
-    #[clap(long, default_value_t=60)]
-    graph_len: usize 
+    #[clap(long, default_value_t = 60)]
+    graph_len: usize,
 }
 
 fn find_possible_arduino_dev() -> Option<String> {
@@ -152,14 +157,12 @@ impl Drop for TerminalHandler {
                 eprintln!("{}", info);
             }
         }
-        
     }
 }
 
 static PANICINFO: Mutex<Option<String>> = Mutex::new(None);
 
 fn main() -> anyhow::Result<()> {
-    
     let parser = Cli::parse();
 
     let baudrate =
@@ -190,7 +193,7 @@ fn main() -> anyhow::Result<()> {
             data: Vec::new(),
             value_pattern: Regex::new("(\\-?\\d+\\.?[\\d]*)").unwrap(),
             window_len: parser.graph_len,
-            window: [0.0, parser.graph_len as f64]   
+            window: [0.0, parser.graph_len as f64],
         });
     }
     std::panic::set_hook(Box::new(|e| {
@@ -198,13 +201,17 @@ fn main() -> anyhow::Result<()> {
         *info = Some(format!("{:?}", e));
     }));
 
-    let mut handler = TerminalHandler::new().unwrap();
-
-    let res = panic::catch_unwind(AssertUnwindSafe( || {
-        app.run(td, &mut handler.terminal)
-    }));
-    println!("{:?}", res);
-
- 
+    let res = {
+        let mut handler = TerminalHandler::new().unwrap();
+        panic::catch_unwind(AssertUnwindSafe(|| app.run(td, &mut handler.terminal)))
+    };
+    match res {
+        Ok(e) => {
+            println!("{:?}", e);
+        }
+        Err(_) => {
+            println!("{}", PANICINFO.lock().unwrap().as_mut().unwrap());
+        }
+    }
     Ok(())
 }

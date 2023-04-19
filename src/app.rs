@@ -20,7 +20,7 @@ use tui::{
 };
 use tui_textarea::TextArea;
 
-use crate::termdev::TerminalDevice;
+use crate::{termdev::TerminalDevice, wraptext::{WrapText, WrapTextState}};
 
 pub struct App {
     outfile: Option<File>,
@@ -121,9 +121,15 @@ impl App {
         let mut ui = None;
 
         let mut textarea = TextArea::default();
-        let mut outputtextarea = TextArea::default();
-        outputtextarea.set_cursor_style(Style::default());
-        outputtextarea.set_line_number_style(Style::default().fg(Color::Yellow));
+        let mut wraptext = WrapText {
+            lines: vec![String::new()],
+            block: None,
+        };
+        let mut text_state = WrapTextState::Follow; 
+
+        // let mut outputtextarea = TextArea::default();
+        // outputtextarea.set_cursor_style(Style::default());
+        // outputtextarea.set_line_number_style(Style::default().fg(Color::Yellow));
 
         let (stop_rx, stop_rc) = mpsc::channel();
         let (read_thread_tx, read_rx) = mpsc::channel();
@@ -136,18 +142,15 @@ impl App {
                 if ui.is_none() {
                     ui = Some(UI::new(b, self.grapher.is_some()));
                 }
-                ui.as_mut().unwrap().render(
-                    b,
-                    &mut textarea,
-                    &mut outputtextarea,
-                    &mut self.grapher,
-                );
+                ui.as_mut()
+                    .unwrap()
+                    .render(b, &mut textarea, &mut wraptext, &mut text_state, &mut self.grapher);
             })?;
 
             // Checke for any incoming bytes from the terminal device.
             if let Ok(res) = read_rx.try_recv() {
                 for byte in &res {
-                    if let Err(e) = self.parse_byte(*byte, &mut outputtextarea) {
+                    if let Err(e) = self.parse_byte(*byte, &mut wraptext) {
                         break 'event Err(e);
                     };
                 }
@@ -168,18 +171,19 @@ impl App {
                         } else if key.code == KeyCode::Char('d')
                             && key.modifiers == KeyModifiers::CONTROL
                         {
-                            outputtextarea.move_cursor(tui_textarea::CursorMove::Bottom);
-                            outputtextarea.move_cursor(tui_textarea::CursorMove::End);
+                            text_state.follow();
+                            // outputtextarea.move_cursor(tui_textarea::CursorMove::Bottom);
+                            // outputtextarea.move_cursor(tui_textarea::CursorMove::End);
                         } else {
                             textarea.input(key);
                         }
                     }
                     Event::Mouse(mouse_event) => match mouse_event.kind {
                         event::MouseEventKind::ScrollDown => {
-                            outputtextarea.scroll((1, 0));
+                            text_state.scroll_down();
                         }
                         event::MouseEventKind::ScrollUp => {
-                            outputtextarea.scroll((-1, 0));
+                            text_state.scroll_up();
                         }
                         _ => {}
                     },
@@ -202,19 +206,20 @@ impl App {
     pub fn parse_byte<'a>(
         &mut self,
         byte: u8,
-        outputtextarea: &mut TextArea<'a>,
+        wraptext: &mut WrapText,
     ) -> std::io::Result<()> {
-        let cursor_pos = outputtextarea.cursor();
-        outputtextarea.move_cursor(tui_textarea::CursorMove::Bottom);
-        outputtextarea.move_cursor(tui_textarea::CursorMove::End);
-        let jumped = cursor_pos != outputtextarea.cursor();
+        // let cursor_pos = wraptext.cursor();
+        // wraptext.move_cursor(tui_textarea::CursorMove::Bottom);
+        // wraptext.move_cursor(tui_textarea::CursorMove::End);
+        // let jumped = cursor_pos != wraptext.cursor();
         if byte == 10 {
             // new line
             if let Some(outfile) = &mut self.outfile {
                 outfile.write_all(&mut format!("\n").into_bytes())?;
                 outfile.flush()?;
             }
-            outputtextarea.insert_newline();
+            // wraptext.insert_newline();
+            wraptext.lines.push(String::new());
             if let Some(grapher) = &mut self.grapher {
                 if let Some(captures) = grapher.value_pattern.captures(&self.cur_line) {
                     if let Some(capture) = captures.get(0) {
@@ -238,19 +243,19 @@ impl App {
                 // If it's not a vaild char, display out its hex value.
                 format!("0x{byte:X}")
             };
-            outputtextarea.insert_str(&str);
+            wraptext.lines.last_mut().unwrap().push_str(&str);
             self.cur_line.push_str(&str);
             if let Some(outfile) = &mut self.outfile {
                 outfile.write_all(&mut str.into_bytes())?;
                 outfile.flush()?;
             }
         }
-        if jumped {
-            outputtextarea.move_cursor(tui_textarea::CursorMove::Jump(
-                cursor_pos.0 as u16,
-                cursor_pos.1 as u16,
-            ));
-        }
+        // if jumped {
+        //     wraptext.move_cursor(tui_textarea::CursorMove::Jump(
+        //         cursor_pos.0 as u16,
+        //         cursor_pos.1 as u16,
+        //     ));
+        // }
         Ok(())
     }
 }
@@ -295,7 +300,8 @@ impl UI {
         &mut self,
         f: &mut Frame<B>,
         textarea: &mut TextArea,
-        outputtextarea: &mut TextArea,
+        wraptext: &mut WrapText,
+        text_state: &mut WrapTextState,
         grapher: &mut Option<Grapher>,
     ) {
         let input_block = Block::default().borders(Borders::ALL);
@@ -304,8 +310,8 @@ impl UI {
         textarea.set_block(input_block);
         f.render_widget(textarea.widget(), self.input_chunk);
 
-        outputtextarea.set_block(output_block);
-        f.render_widget(outputtextarea.widget(), self.ouput_chunk);
+        wraptext.set_block(output_block);
+        f.render_stateful_widget(wraptext.widget(), self.ouput_chunk, text_state);
 
         if let Some(graph_chunk) = self.graph_chunk {
             let graph_block = Block::default().borders(Borders::ALL);
@@ -329,9 +335,9 @@ impl UI {
                 .and_then(|x| Some(x.1))
                 .unwrap_or(1.0);
             let size = max - min;
-            let min = min - 0.1 * size - 0.001*max.abs().max(min.abs());
-            let max = max + 0.1 * size + 0.001*max.abs().max(min.abs());
-            let mean = (max + min)/2.0;
+            let min = min - 0.1 * size - 0.001 * max.abs().max(min.abs());
+            let max = max + 0.1 * size + 0.001 * max.abs().max(min.abs());
+            let mean = (max + min) / 2.0;
 
             let chart = Chart::new(datasets)
                 .block(graph_block)
