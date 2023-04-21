@@ -1,9 +1,24 @@
-use tui::widgets::{Block, StatefulWidget, Widget};
+use tui::{
+    layout::Rect,
+    widgets::{Block, StatefulWidget, Widget},
+};
 
 #[derive(Clone, Copy, Debug)]
-pub enum WrapTextState {
-    At(isize, i32), // At(line index, offset from bottom of line)
+pub enum Position {
+    At(i32, i32), // At(line index, offset from bottom of line)
     Follow,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum Movement {
+    ScrollUp,
+    ScrollDown,
+    Follow,
+}
+
+pub struct WrapTextState {
+    pub position: Position,
+    pub movement_queue: Vec<Movement>,
 }
 
 pub struct WrapText<'b> {
@@ -30,25 +45,96 @@ impl<'b> WrapText<'b> {
 
 impl WrapTextState {
     pub fn scroll_up(&mut self) {
-        *self = match self {
-            WrapTextState::At(line, offset) => {
-                if *line == 0 {
-                    WrapTextState::At(0, 0)
-                } else {
-                    WrapTextState::At(*line, *offset - 1)
-                }
-            }
-            WrapTextState::Follow => WrapTextState::At(-1, 0),
-        };
+        self.movement_queue.push(Movement::ScrollUp);
     }
     pub fn scroll_down(&mut self) {
-        *self = match self {
-            WrapTextState::At(line, offset) => WrapTextState::At(*line, *offset + 1),
-            WrapTextState::Follow => WrapTextState::Follow,
-        };
+        self.movement_queue.push(Movement::ScrollDown);
     }
     pub fn follow(&mut self) {
-        *self = WrapTextState::Follow;
+        self.movement_queue.push(Movement::Follow);
+    }
+}
+
+impl Position {
+    pub fn do_movement(
+        &mut self,
+        mov: Movement,
+        line_number_width: usize,
+        text_area: Rect,
+        lines: &[String],
+    ) {
+        *self = match mov {
+            Movement::ScrollUp => match self {
+                Position::At(ref mut line, ref mut offset) => {
+                    if *offset == 0 {
+                        if *line != 0 {
+                            *line -= 1;
+                            let height = (lines[*line as usize].len() + line_number_width - 1)
+                                / text_area.width as usize
+                                + 1;
+                            *offset = height as i32 - 1;
+                        }
+                    } else {
+                        *offset -= 1
+                    }
+                    self.clone()
+                }
+                Position::Follow => {
+                    let (l, of) =
+                        Position::follow_get_start_pos(text_area, lines, line_number_width);
+                    Position::At(l, of)
+                }
+            },
+            Movement::ScrollDown => match self {
+                Position::At(ref mut line, ref mut offset) => {
+                    let height = (lines[*line as usize].len() + line_number_width - 1)
+                        / text_area.width as usize
+                        + 1;
+                    if *offset + 1 >= height as i32 {
+                        if *line >= lines.len() as i32 - 1 {
+                            *offset = (text_area.height as i32 - 1).min(*offset + 1);
+                        } else {
+                            *line += 1;
+                            *offset = 0;
+                        }
+                    } else {
+                        *offset += 1;
+                    }
+                    self.clone()
+                }
+                Position::Follow => {
+                    let (l, of) =
+                        Position::follow_get_start_pos(text_area, lines, line_number_width);
+                    Position::At(l, of)
+                }
+            },
+            Movement::Follow => Position::Follow,
+        }
+    }
+
+    /// Computes the start position given that we follow.
+    pub fn follow_get_start_pos(
+        text_area: Rect,
+        lines: &[String],
+        line_number_width: usize,
+    ) -> (i32, i32) {
+        let mut line_idx = -1;
+        let mut offset = 0;
+        let mut tot_height = 0;
+        for line in lines.iter().rev() {
+            let height =
+                (line.len() as i32 + line_number_width as i32 - 1) / text_area.width as i32 + 1;
+            tot_height += height as u16;
+            if tot_height > text_area.height {
+                offset = height as i32 - (tot_height - text_area.height) as i32;
+                if (tot_height - text_area.height) > 1 {
+                    line_idx += 1
+                }
+                break;
+            }
+            line_idx += 1;
+        }
+        (lines.len() as i32 - 1 - line_idx, offset)
     }
 }
 
@@ -72,76 +158,21 @@ impl<'a, 'b> StatefulWidget for WrappableTextWidget<'a, 'b> {
             None => area,
         };
 
-        let start_scroll_up = false;
-        match state {
-            WrapTextState::At(ref mut line, ref mut offset) => {
-                if *line == -1 {
-                    *line = self.lines.len() as isize - 1;
-                } else {
-                    if *offset < 0 {
-                        if *line != 0 {
-                            let height = (self.lines[*line as usize].len() + line_number_width)
-                                / text_area.width as usize;
-                            *line -= 1;
-                            *offset = height as i32;
-                        }
-                    } else {
-                        if *line < self.lines.len() as isize-1 {
-                            let height = (self.lines[*line as usize].len() + line_number_width)
-                                / text_area.width as usize;
-                            if *offset > height as i32 {
-                                *line += 1;
-                                *offset = 0;
-                            }
-                        }
-                    }
-                }
-            }
-            WrapTextState::Follow => {}
+        for movement in &state.movement_queue {
+            dbg!(movement);
+            state
+                .position
+                .do_movement(*movement, line_number_width, text_area, &self.lines);
+            dbg!(state.position);
         }
+        state.movement_queue.clear();
 
-        let (mut start_line_idx, mut offset) = match state {
-            WrapTextState::At(line, offset) => (*line, *offset),
-            WrapTextState::Follow => {
-                let mut line_idx = -1;
-                let mut offset = 0;
-                let mut tot_height = 0;
-                for line in self.lines.iter().rev() {
-                    let height = (line.len() as i32 + line_number_width as i32 - 1)
-                        / text_area.width as i32
-                        + 1;
-                    tot_height += height as u16;
-                    if tot_height > text_area.height {
-                        offset = height as i32 - (tot_height - text_area.height) as i32;
-                        if (tot_height - text_area.height) > 1 {
-                            line_idx += 1
-                        }
-                        break;
-                    }
-                    line_idx += 1;
-                }
-                (0.max(self.lines.len() as isize - 1 - line_idx), offset)
+        let (start_line_idx, offset) = match state.position {
+            Position::At(line_idx, offset) => (line_idx, offset),
+            Position::Follow => {
+                Position::follow_get_start_pos(text_area, &self.lines, line_number_width)
             }
         };
-
-        // If we scrolled up when following.
-        if start_scroll_up {
-            if start_line_idx != 0 {
-                if offset != 0 {
-                    *state = WrapTextState::At(start_line_idx, offset - 1);
-                    offset = -1
-                } else {
-                    let height = (line_number_width as i32 + self.lines[start_line_idx as usize - 1].len() as i32 - 1)
-                        / text_area.width as i32;
-                    *state = WrapTextState::At(start_line_idx - 1, height-1);
-                    start_line_idx = start_line_idx-1;
-                    offset = height-1;
-                }
-            } else {
-                *state = WrapTextState::At(0, 0.max(offset-1));
-                offset = 0.max(offset-1);
-            }
-        }
 
         let mut cur_row = 0;
         for (line_idx_rel, line) in self.lines[start_line_idx as usize..].iter().enumerate() {

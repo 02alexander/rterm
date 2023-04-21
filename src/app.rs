@@ -20,7 +20,10 @@ use tui::{
 };
 use tui_textarea::TextArea;
 
-use crate::{termdev::TerminalDevice, wraptext::{WrapText, WrapTextState}};
+use crate::{
+    termdev::TerminalDevice,
+    wraptext::{Position, WrapText, WrapTextState},
+};
 
 pub struct App {
     outfile: Option<File>,
@@ -125,7 +128,10 @@ impl App {
             lines: vec![String::new()],
             block: None,
         };
-        let mut text_state = WrapTextState::Follow; 
+        let mut text_state = WrapTextState {
+            position: Position::Follow,
+            movement_queue: Vec::new(),
+        };
 
         // let mut outputtextarea = TextArea::default();
         // outputtextarea.set_cursor_style(Style::default());
@@ -142,9 +148,13 @@ impl App {
                 if ui.is_none() {
                     ui = Some(UI::new(b, self.grapher.is_some()));
                 }
-                ui.as_mut()
-                    .unwrap()
-                    .render(b, &mut textarea, &mut wraptext, &mut text_state, &mut self.grapher);
+                ui.as_mut().unwrap().render(
+                    b,
+                    &mut textarea,
+                    &mut wraptext,
+                    &mut text_state,
+                    &mut self.grapher,
+                );
             })?;
 
             // Checke for any incoming bytes from the terminal device.
@@ -203,11 +213,7 @@ impl App {
     }
 
     /// Parses a byte from the terminal device.
-    pub fn parse_byte<'a>(
-        &mut self,
-        byte: u8,
-        wraptext: &mut WrapText,
-    ) -> std::io::Result<()> {
+    pub fn parse_byte<'a>(&mut self, byte: u8, wraptext: &mut WrapText) -> std::io::Result<()> {
         // let cursor_pos = wraptext.cursor();
         // wraptext.move_cursor(tui_textarea::CursorMove::Bottom);
         // wraptext.move_cursor(tui_textarea::CursorMove::End);
