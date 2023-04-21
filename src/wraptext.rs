@@ -1,6 +1,7 @@
 use tui::{
     layout::Rect,
-    widgets::{Block, StatefulWidget, Widget}, style::{Style, Color},
+    style::{Color, Style},
+    widgets::{Block, StatefulWidget, Widget},
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -77,7 +78,7 @@ impl Position {
                     } else {
                         *offset -= 1
                     }
-                    self.clone()
+                    *self
                 }
                 Position::Follow => {
                     let (l, of) =
@@ -100,7 +101,7 @@ impl Position {
                     } else {
                         *offset += 1;
                     }
-                    self.clone()
+                    *self
                 }
                 Position::Follow => {
                     let (l, of) =
@@ -164,44 +165,51 @@ impl<'a, 'b> StatefulWidget for WrappableTextWidget<'a, 'b> {
         for movement in &state.movement_queue {
             state
                 .position
-                .do_movement(*movement, line_number_width, text_area, &self.lines);
+                .do_movement(*movement, line_number_width, text_area, self.lines);
         }
         state.movement_queue.clear();
 
         let (start_line_idx, offset) = match state.position {
             Position::At(line_idx, offset) => (line_idx, offset),
             Position::Follow => {
-                Position::follow_get_start_pos(text_area, &self.lines, line_number_width)
+                Position::follow_get_start_pos(text_area, self.lines, line_number_width)
             }
         };
-        dbg!((start_line_idx, offset));
         let mut cur_row: i32 = -offset;
         for (line_idx_rel, line) in self.lines[start_line_idx as usize..].iter().enumerate() {
             let mut cur_col = 0;
             let mut tmp_string = String::new();
-            if  cur_row >= 0 && cur_row < text_area.height as i32 && text_area.width >= line_number_width as u16 {
-                buf.set_style(Rect::new(text_area.x, (text_area.y as i32+cur_row) as u16, line_number_width as u16, 1), Style::default().fg(Color::Yellow));
+            if cur_row >= 0
+                && cur_row < text_area.height as i32
+                && text_area.width >= line_number_width as u16
+            {
+                buf.set_style(
+                    Rect::new(
+                        text_area.x,
+                        (text_area.y as i32 + cur_row) as u16,
+                        line_number_width as u16,
+                        1,
+                    ),
+                    Style::default().fg(Color::Yellow),
+                );
             }
             for (i, ch) in format!(" {:0>2} ", (start_line_idx as usize + line_idx_rel) % 100)
                 .chars()
                 .chain(line.chars())
                 .enumerate()
             {
-                if text_area.bottom() as i32 <= text_area.y as i32 + cur_row as i32 {
+                if text_area.bottom() as i32 <= text_area.y as i32 + cur_row {
                     break;
                 }
 
-                if cur_row >= 0{
+                if cur_row >= 0 {
                     tmp_string.push(ch);
-                    buf.get_mut(
-                        text_area.x + cur_col,
-                        text_area.y + cur_row as u16,
-                    )
-                    .set_symbol(&tmp_string);
-                    tmp_string.clear();    
+                    buf.get_mut(text_area.x + cur_col, text_area.y + cur_row as u16)
+                        .set_symbol(&tmp_string);
+                    tmp_string.clear();
                 }
 
-                let is_last = i == line_number_width+line.len()-1;
+                let is_last = i == line_number_width + line.len() - 1;
                 cur_col += 1;
                 if cur_col >= text_area.width && !is_last {
                     cur_col = 0;

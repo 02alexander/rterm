@@ -68,7 +68,7 @@ impl TerminalDevice {
             },
             TerminalWriter {
                 fd: self.fd,
-                _drop_handler: self._drop_handler.clone(),
+                _drop_handler: self._drop_handler,
             },
         )
     }

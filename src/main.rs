@@ -46,12 +46,11 @@ fn find_possible_arduino_dev() -> Option<String> {
         let dir_entry = dir_entry.ok()?;
         let os_file_name = dir_entry.file_name();
         let file_name = os_file_name.to_string_lossy();
-        if file_name.starts_with("tty") {
-            if file_name.len() >= 6 {
-                if &file_name[3..6] == "USB" || &file_name[3..6] == "ACM" {
-                    return Some("/dev/".to_string() + &file_name);
-                }
-            }
+        if file_name.starts_with("tty")
+            && file_name.len() >= 6
+            && (&file_name[3..6] == "USB" || &file_name[3..6] == "ACM")
+        {
+            return Some("/dev/".to_string() + &file_name);
         }
     }
     None

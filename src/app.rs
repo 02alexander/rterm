@@ -69,10 +69,11 @@ pub fn term_io_loop(
                         output.send(Vec::from(&buf[..n]))?;
                     }
                 }
-                Err(e) => match e.kind() {
-                    io::ErrorKind::WouldBlock => {}
-                    _ => {}
-                },
+                Err(e) => {
+                    if e.kind() != io::ErrorKind::WouldBlock {
+                        { Err(e) }?;
+                    }
+                }
             }
         }
     });
@@ -101,8 +102,8 @@ pub fn term_io_loop(
     }
     let _ = read_thread_stop_tx.send(());
     let _ = write_thread_stop_tx.send(());
-    let _ = term_reader_handle.join().unwrap()?;
-    let _ = term_writer_handle.join().unwrap()?;
+    term_reader_handle.join().unwrap()?;
+    term_writer_handle.join().unwrap()?;
     Ok(())
 }
 
@@ -157,7 +158,7 @@ impl App {
                         &mut text_state,
                         &mut self.grapher,
                     )
-                })?;    
+                })?;
             }
 
             // Checke for any incoming bytes from the terminal device.
@@ -200,14 +201,14 @@ impl App {
                         event::MouseEventKind::ScrollUp => {
                             text_state.scroll_up();
                         }
-                        _ => { should_update = false }
+                        _ => should_update = false,
                     },
                     Event::Resize(w, h) => {
                         if let Some(ui) = ui.as_mut() {
                             ui.update_size(w, h, self.grapher.is_some());
                         }
                     }
-                    _ => { should_update = false}
+                    _ => should_update = false,
                 }
                 if should_update {
                     update = true;
@@ -221,7 +222,7 @@ impl App {
     }
 
     /// Parses a byte from the terminal device.
-    pub fn parse_byte<'a>(&mut self, byte: u8, wraptext: &mut WrapText) -> std::io::Result<()> {
+    pub fn parse_byte(&mut self, byte: u8, wraptext: &mut WrapText) -> std::io::Result<()> {
         // let cursor_pos = wraptext.cursor();
         // wraptext.move_cursor(tui_textarea::CursorMove::Bottom);
         // wraptext.move_cursor(tui_textarea::CursorMove::End);
@@ -229,7 +230,7 @@ impl App {
         if byte == 10 {
             // new line
             if let Some(outfile) = &mut self.outfile {
-                outfile.write_all(&mut format!("\n").into_bytes())?;
+                outfile.write_all(&"\n".to_string().into_bytes())?;
                 outfile.flush()?;
             }
             // wraptext.insert_newline();
@@ -260,7 +261,7 @@ impl App {
             wraptext.lines.last_mut().unwrap().push_str(&str);
             self.cur_line.push_str(&str);
             if let Some(outfile) = &mut self.outfile {
-                outfile.write_all(&mut str.into_bytes())?;
+                outfile.write_all(&str.into_bytes())?;
                 outfile.flush()?;
             }
         }
@@ -336,17 +337,17 @@ impl UI {
                 .marker(symbols::Marker::Braille)
                 .style(Style::default().fg(Color::Yellow))
                 .graph_type(GraphType::Line)
-                .data(&visible_data)];
+                .data(visible_data)];
 
             let min = visible_data
                 .iter()
                 .min_by_key(|(_x, y)| OrderedFloat(*y))
-                .and_then(|x| Some(x.1))
+                .map(|x| x.1)
                 .unwrap_or(-1.0);
             let max = visible_data
                 .iter()
                 .max_by_key(|(_x, y)| OrderedFloat(*y))
-                .and_then(|x| Some(x.1))
+                .map(|x| x.1)
                 .unwrap_or(1.0);
             let size = max - min;
             let min = min - 0.1 * size - 0.001 * max.abs().max(min.abs());
