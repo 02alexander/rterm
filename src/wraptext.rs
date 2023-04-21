@@ -124,16 +124,18 @@ impl Position {
         for line in lines.iter().rev() {
             let height =
                 (line.len() as i32 + line_number_width as i32 - 1) / text_area.width as i32 + 1;
-            dbg!(line, height);
             tot_height += height as u16;
+            line_idx += 1;
             if tot_height > text_area.height {
-                offset = height as i32 - (tot_height - text_area.height) as i32;
-                if (tot_height - text_area.height) > 1 {
-                    line_idx += 1
-                }
+                offset = (tot_height - text_area.height) as i32;
+                // if (tot_height - text_area.height) > 1 {
+                //     line_idx += 1
+                // }
                 break;
             }
-            line_idx += 1;
+            if tot_height == text_area.height {
+                break;
+            }
         }
         (lines.len() as i32 - 1 - line_idx, offset)
     }
@@ -172,32 +174,32 @@ impl<'a, 'b> StatefulWidget for WrappableTextWidget<'a, 'b> {
                 Position::follow_get_start_pos(text_area, &self.lines, line_number_width)
             }
         };
-
-        let mut cur_row = 0;
+        dbg!((start_line_idx, offset));
+        let mut cur_row: i32 = -offset;
         for (line_idx_rel, line) in self.lines[start_line_idx as usize..].iter().enumerate() {
             let mut cur_col = 0;
             let mut tmp_string = String::new();
-            if cur_row < text_area.height && text_area.width >= line_number_width as u16 {
-                buf.set_style(Rect::new(text_area.x, text_area.y+cur_row, line_number_width as u16, 1), Style::default().fg(Color::Yellow));
+            if  cur_row >= 0 && cur_row < text_area.height as i32 && text_area.width >= line_number_width as u16 {
+                buf.set_style(Rect::new(text_area.x, (text_area.y as i32+cur_row) as u16, line_number_width as u16, 1), Style::default().fg(Color::Yellow));
             }
             for (i, ch) in format!(" {:0>2} ", (start_line_idx as usize + line_idx_rel) % 100)
                 .chars()
                 .chain(line.chars())
                 .enumerate()
             {
-                if text_area.bottom() <= text_area.y + cur_row {
+                if text_area.bottom() as i32 <= text_area.y as i32 + cur_row as i32 {
                     break;
                 }
-                if cur_row < offset as u16 {
-                    continue;
+
+                if cur_row >= 0{
+                    tmp_string.push(ch);
+                    buf.get_mut(
+                        text_area.x + cur_col,
+                        text_area.y + cur_row as u16,
+                    )
+                    .set_symbol(&tmp_string);
+                    tmp_string.clear();    
                 }
-                tmp_string.push(ch);
-                buf.get_mut(
-                    text_area.x + cur_col,
-                    (text_area.y + cur_row) - offset as u16,
-                )
-                .set_symbol(&tmp_string);
-                tmp_string.clear();
 
                 let is_last = i == line_number_width+line.len()-1;
                 cur_col += 1;

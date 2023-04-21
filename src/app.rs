@@ -140,25 +140,29 @@ impl App {
         let (stop_rx, stop_rc) = mpsc::channel();
         let (read_thread_tx, read_rx) = mpsc::channel();
         let (write_tx, write_thread_rx) = mpsc::channel();
+        let mut update = true;
 
         let _ = thread::spawn(|| term_io_loop(td, stop_rc, write_thread_rx, read_thread_tx));
-
         let res = 'event: loop {
-            terminal.draw(|b| {
-                if ui.is_none() {
-                    ui = Some(UI::new(b, self.grapher.is_some()));
-                }
-                ui.as_mut().unwrap().render(
-                    b,
-                    &mut textarea,
-                    &mut wraptext,
-                    &mut text_state,
-                    &mut self.grapher,
-                );
-            })?;
+            if update {
+                update = false;
+                terminal.draw(|b| {
+                    if ui.is_none() {
+                        ui = Some(UI::new(b, self.grapher.is_some()));
+                    }
+                    ui.as_mut().unwrap().render(
+                        b,
+                        &mut textarea,
+                        &mut wraptext,
+                        &mut text_state,
+                        &mut self.grapher,
+                    )
+                })?;    
+            }
 
             // Checke for any incoming bytes from the terminal device.
             if let Ok(res) = read_rx.try_recv() {
+                update = true;
                 for byte in &res {
                     if let Err(e) = self.parse_byte(*byte, &mut wraptext) {
                         break 'event Err(e);
@@ -168,6 +172,7 @@ impl App {
 
             if let Ok(true) = event::poll(Duration::from_millis(1)) {
                 let event = event::read()?;
+                let mut should_update = true;
                 match event {
                     Event::Key(key) => {
                         if key.code == KeyCode::Esc {
@@ -195,14 +200,17 @@ impl App {
                         event::MouseEventKind::ScrollUp => {
                             text_state.scroll_up();
                         }
-                        _ => {}
+                        _ => { should_update = false }
                     },
                     Event::Resize(w, h) => {
                         if let Some(ui) = ui.as_mut() {
                             ui.update_size(w, h, self.grapher.is_some());
                         }
                     }
-                    _ => {}
+                    _ => { should_update = false}
+                }
+                if should_update {
+                    update = true;
                 }
             }
         };
