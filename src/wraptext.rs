@@ -1,6 +1,6 @@
 use tui::{
     layout::Rect,
-    widgets::{Block, StatefulWidget, Widget},
+    widgets::{Block, StatefulWidget, Widget}, style::{Style, Color},
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -124,6 +124,7 @@ impl Position {
         for line in lines.iter().rev() {
             let height =
                 (line.len() as i32 + line_number_width as i32 - 1) / text_area.width as i32 + 1;
+            dbg!(line, height);
             tot_height += height as u16;
             if tot_height > text_area.height {
                 offset = height as i32 - (tot_height - text_area.height) as i32;
@@ -159,11 +160,9 @@ impl<'a, 'b> StatefulWidget for WrappableTextWidget<'a, 'b> {
         };
 
         for movement in &state.movement_queue {
-            dbg!(movement);
             state
                 .position
                 .do_movement(*movement, line_number_width, text_area, &self.lines);
-            dbg!(state.position);
         }
         state.movement_queue.clear();
 
@@ -178,9 +177,13 @@ impl<'a, 'b> StatefulWidget for WrappableTextWidget<'a, 'b> {
         for (line_idx_rel, line) in self.lines[start_line_idx as usize..].iter().enumerate() {
             let mut cur_col = 0;
             let mut tmp_string = String::new();
-            for ch in format!(" {:0>2} ", (start_line_idx as usize + line_idx_rel) % 100)
+            if cur_row < text_area.height && text_area.width >= line_number_width as u16 {
+                buf.set_style(Rect::new(text_area.x, text_area.y+cur_row, line_number_width as u16, 1), Style::default().fg(Color::Yellow));
+            }
+            for (i, ch) in format!(" {:0>2} ", (start_line_idx as usize + line_idx_rel) % 100)
                 .chars()
                 .chain(line.chars())
+                .enumerate()
             {
                 if text_area.bottom() <= text_area.y + cur_row {
                     break;
@@ -196,8 +199,9 @@ impl<'a, 'b> StatefulWidget for WrappableTextWidget<'a, 'b> {
                 .set_symbol(&tmp_string);
                 tmp_string.clear();
 
+                let is_last = i == line_number_width+line.len()-1;
                 cur_col += 1;
-                if cur_col >= text_area.width {
+                if cur_col >= text_area.width && !is_last {
                     cur_col = 0;
                     cur_row += 1;
                 }
@@ -206,3 +210,5 @@ impl<'a, 'b> StatefulWidget for WrappableTextWidget<'a, 'b> {
         }
     }
 }
+
+// aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
