@@ -77,6 +77,7 @@ pub fn term_io_loop(
                     }
                 }
             }
+            thread::sleep(Duration::from_millis(1));
         }
     });
 
@@ -89,6 +90,7 @@ pub fn term_io_loop(
             let data: Vec<u8> = input.recv()?;
             term_writer.write_all(&data)?;
             term_writer.flush()?;
+            thread::sleep(Duration::from_millis(1));
         }
     });
 
@@ -101,6 +103,8 @@ pub fn term_io_loop(
         if term_reader_handle.is_finished() || term_writer_handle.is_finished() {
             break;
         }
+        thread::sleep(Duration::from_millis(1));
+
     }
     let _ = read_thread_stop_tx.send(());
     let _ = write_thread_stop_tx.send(());
@@ -144,6 +148,7 @@ impl App {
 
         let _ = thread::spawn(|| term_io_loop(td, stop_rc, write_thread_rx, read_thread_tx));
         let res = 'event: loop {
+            thread::sleep(Duration::from_millis(10));
             if update {
                 update = false;
                 terminal.draw(|b| {
