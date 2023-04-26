@@ -28,6 +28,7 @@ use crate::{
 pub struct App {
     outfile: Option<File>,
     history: Vec<String>,
+    browsing_history: Option<usize>, // Index into history if we are browsing history.
     cur_line: String,
     pub grapher: Option<Grapher>,
 }
@@ -113,6 +114,7 @@ impl App {
             outfile,
             cur_line: String::new(),
             history: Vec::new(),
+            browsing_history: None,
             grapher: None,
         }
     }
@@ -133,10 +135,6 @@ impl App {
             position: Position::Follow,
             movement_queue: Vec::new(),
         };
-
-        // let mut outputtextarea = TextArea::default();
-        // outputtextarea.set_cursor_style(Style::default());
-        // outputtextarea.set_line_number_style(Style::default().fg(Color::Yellow));
 
         let (stop_rx, stop_rc) = mpsc::channel();
         let (read_thread_tx, read_rx) = mpsc::channel();
@@ -176,22 +174,51 @@ impl App {
                 let mut should_update = true;
                 match event {
                     Event::Key(key) => {
-                        if key.code == KeyCode::Esc {
-                            return Ok(());
-                        } else if key.code == KeyCode::Enter {
-                            let mut line = textarea.lines()[0].clone();
-                            textarea = TextArea::default();
-                            line.push('\n');
-                            write_tx.send(line.bytes().collect())?;
-                            self.history.push(line);
-                        } else if key.code == KeyCode::Char('d')
-                            && key.modifiers == KeyModifiers::CONTROL
-                        {
-                            text_state.follow();
-                            // outputtextarea.move_cursor(tui_textarea::CursorMove::Bottom);
-                            // outputtextarea.move_cursor(tui_textarea::CursorMove::End);
-                        } else {
-                            textarea.input(key);
+                        match key.code {
+                            KeyCode::Esc => {
+                                return Ok(());
+                            },
+                            KeyCode::Enter => {
+                                let mut line = textarea.lines()[0].clone();
+                                textarea = TextArea::default();
+                                self.history.push(line.clone());
+                                line.push('\n');
+                                write_tx.send(line.bytes().collect())?;
+                            },
+                            KeyCode::Char('d') => {
+                                if key.modifiers == KeyModifiers::CONTROL {
+                                    text_state.follow();
+                                }
+                            },
+                            KeyCode::Up => {
+                                if textarea.is_empty() && self.browsing_history.is_none() {
+                                    self.browsing_history = Some(self.history.len() - 1);
+                                } else if let Some(ref mut idx) = self.browsing_history {
+                                    *idx = (*idx as i64-1).clamp(0, self.history.len() as i64-1) as usize;
+                                }
+
+                                if let Some(idx) = self.browsing_history {
+                                    textarea.delete_line_by_end();
+                                    textarea.delete_line_by_head();
+                                    textarea.insert_str(&self.history[idx]);
+                                }
+
+                            },
+                            KeyCode::Down => {
+                                if let Some(ref mut idx) = self.browsing_history {
+                                    *idx = (*idx as i64 + 1).clamp(0, self.history.len() as i64-1) as usize;
+                                }
+                                if let Some(idx) = self.browsing_history {
+                                    textarea.delete_line_by_end();
+                                    textarea.delete_line_by_head();
+                                    textarea.insert_str(&self.history[idx]);
+                                }
+
+                            },
+                            _ => {
+                                self.browsing_history = None;
+                                textarea.input(key);
+                            }
                         }
                     }
                     Event::Mouse(mouse_event) => match mouse_event.kind {
