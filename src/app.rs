@@ -11,11 +11,11 @@ use ordered_float::OrderedFloat;
 use regex::Regex;
 use tui::{
     backend::Backend,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Rect, Alignment},
     style::{Color, Modifier, Style},
     symbols,
-    text::Span,
-    widgets::{Axis, Block, Borders, Chart, Dataset, GraphType},
+    text::{Span, Spans},
+    widgets::{Axis, Block, Borders, Chart, Dataset, GraphType, Paragraph},
     Frame, Terminal,
 };
 use tui_textarea::TextArea;
@@ -44,6 +44,7 @@ pub struct UI {
     input_chunk: Rect,
     ouput_chunk: Rect,
     graph_chunk: Option<Rect>,
+    help_info_chunk: Rect,
 }
 
 pub fn term_io_loop(
@@ -306,10 +307,12 @@ impl UI {
     fn new(f: &mut Frame<impl Backend>, graph: bool) -> Self {
         let chunks = UI::generate_chunks(f.size(), graph);
         let graph_chunk = if graph { Some(chunks[2]) } else { None };
+        let help_info_chunk = if graph { chunks[3] } else { chunks[2] };
         UI {
             ouput_chunk: chunks[1],
             input_chunk: chunks[0],
             graph_chunk,
+            help_info_chunk,
         }
     }
 
@@ -321,6 +324,7 @@ impl UI {
         } else {
             constraints.push(Constraint::Min(4));
         }
+        constraints.push(Constraint::Length(2));
         Layout::default()
             .direction(Direction::Vertical)
             .constraints(constraints)
@@ -330,10 +334,12 @@ impl UI {
     fn update_size(&mut self, width: u16, height: u16, graph: bool) {
         let chunks = UI::generate_chunks(Rect::new(0, 0, width, height), graph);
         let graph_chunk = if graph { Some(chunks[2]) } else { None };
+        let help_info_chunk = if graph { chunks[3] } else { chunks[2] };
         *self = UI {
             ouput_chunk: chunks[1],
             input_chunk: chunks[0],
             graph_chunk,
+            help_info_chunk,
         }
     }
 
@@ -397,5 +403,17 @@ impl UI {
                 ]));
             f.render_widget(chart, graph_chunk);
         }
+
+        let text = vec![
+            Spans::from(vec![
+                Span::styled("Exit - Esc       Goto bottom - Ctrl+d",Style::default().fg(Color::LightRed)),
+            ]),
+        ];
+        let par = Paragraph::new(text)
+            .block(Block::default().borders(Borders::LEFT.union(Borders::RIGHT).union(Borders::BOTTOM)))
+            .alignment(Alignment::Center);
+            //.wrap(Wrap { trim: true });
+        f.render_widget(par, self.help_info_chunk);
     }
+
 }
