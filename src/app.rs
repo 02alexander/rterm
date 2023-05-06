@@ -189,7 +189,6 @@ impl App {
                                 textarea = TextArea::default();
                                 self.history.push(line.clone());
                                 self.browsing_history = None;
-                                eprintln!("{:?}", &line);
                                 line.push('\n');
                                 write_tx.send(line.bytes().collect())?;
                             },
