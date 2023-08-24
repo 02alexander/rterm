@@ -187,15 +187,12 @@ impl App {
                             KeyCode::Enter => {
                                 let mut line = textarea.lines()[0].clone();
                                 textarea = TextArea::default();
-                                self.history.push(line.clone());
+                                if Some(&line) != self.history.last() {
+                                    self.history.push(line.clone());                                    
+                                }
                                 self.browsing_history = None;
                                 line.push('\n');
                                 write_tx.send(line.bytes().collect())?;
-                            },
-                            KeyCode::Char('d') => {
-                                if key.modifiers == KeyModifiers::CONTROL {
-                                    text_state.follow();
-                                }
                             },
                             KeyCode::Up => {
                                 if textarea.is_empty() && self.browsing_history.is_none() {
@@ -223,8 +220,12 @@ impl App {
 
                             },
                             _ => {
-                                self.browsing_history = None;
-                                textarea.input(key);
+                                if key.code == KeyCode::Char('d') && key.modifiers == KeyModifiers::CONTROL {
+                                    text_state.follow();
+                                } else {
+                                    self.browsing_history = None;
+                                    textarea.input(key);
+                                }
                             }
                         }
                     }
